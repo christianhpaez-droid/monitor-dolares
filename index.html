@@ -1,62 +1,102 @@
 <!doctype html>
 <html lang="es">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Prueba JS + CDN</title>
-  https://cdn.jsdelivr.net
-  <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 20px; }
-    .ok { color: #16a34a; font-weight: 700; }
-    .err { color: #dc2626; font-weight: 700; }
-    #box { margin: 10px 0 20px; }
-  </style>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Monitor Dólar ARS — Oficial, MEP, CCL, Blue, Cripto</title>
+https://cdnjs.cloudflare.com
+https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js</script>
+<style>
+  :root {
+    --bg:#0f172a; --panel:#111827; --text:#e5e7eb; --muted:#9ca3af;
+    --accent:#60a5fa; --ok:#22c55e; --warn:#f59e0b; --bad:#ef4444; --gold:#facc15;
+  }
+  *{box-sizing:border-box} body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Arial;background:var(--bg);color:var(--text)}
+  header{padding:16px 20px;background:#0b1220;border-bottom:1px solid #1f2937}
+  header h1{margin:0;font-size:20px} header small{color:var(--muted)}
+  .wrap{padding:16px;max-width:1250px;margin:0 auto}
+  .grid{display:grid;gap:14px}
+  .cards{grid-template-columns:repeat(auto-fit,minmax(250px,1fr))}
+  .card,.panel{background:var(--panel);border:1px solid #1f2937;border-radius:12px;padding:14px}
+  .card h3{margin:0 0 8px 0;font-size:14px;color:var(--muted)}
+  .price{font-weight:700;font-size:28px}
+  .muted{color:var(--muted);font-size:12px}
+  .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+  label{font-size:12px;color:var(--muted);margin-right:8px}
+  input,select,button{background:#0b1220;color:var(--text);border:1px solid #1f2937;border-radius:8px;padding:8px}
+  button{cursor:pointer;border-color:#334155}
+  table{width:100%;border-collapse:collapse} th,td{border-bottom:1px solid #1f2937;padding:8px 6px;text-align:left;font-size:13px}
+  th{color:var(--muted);font-weight:600}
+  .brecha.pos{color:var(--bad)} .brecha.neg{color:var(--ok)}
+  .hint{color:var(--muted);font-size:12px}
+</style>
 </head>
 <body>
-  <h1>Prueba de JavaScript + CDN</h1>
-  <div id="box">Cargando...</div>
-  <canvas id="c" width="500" height="220" style="border:1px solid #ddd"></canvas>
+<header>
+  <h1>Monitor Dólar ARS — Oficial • MEP • CCL • Blue • Cripto</h1>
+  <small>Bandas del Gobierno + Bollinger + Proyección + Arbitraje</small>
+</header>
 
-  <!-- Cargar Chart.js desde jsDelivr (CDN) -->
-  https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js</script>
+<div class="wrap grid">
+  <section class="grid cards" id="cards"></section>
+  <section class="panel">
+    <h2>Brechas vs Oficial</h2>
+    <div class="hint">Brecha = (Precio − Oficial) / Oficial · 100</div>
+    <table id="brechasTbl"><thead><tr><th>Tipo</th><th>Compra</th><th>Venta</th><th>Brecha</th></tr></thead><tbody></tbody></table>
+    <div id="errorMsg" style="color:#ef4444;font-size:13px;margin-top:8px;"></div>
+  </section>
+  <section class="panel">
+    <h2>Gráfico + Bollinger + Bandas Gobierno</h2>
+    <canvas id="chart" height="90"></canvas>
+  </section>
+</div>
 
-  <script>
-    (function () {
-      // 1) Verificar que el HTML NO esté escapado: si ves el mensaje OK abajo, el JS corrió.
-      const ok = document.createElement('div');
-      ok.className = 'ok';
-      ok.textContent = '✅ JavaScript está corriendo';
-      document.getElementById('box').innerHTML = '';
-      document.getElementById('box').appendChild(ok);
+<script>
+const ENDPOINT_LIVE = 'https://dolarapi.com/v1/dolares';
+const ENDPOINT_HIST = (days)=>`https://api.bluelytics.com.ar/v2/evolution.json?days=${days}`;
+const $ = (s)=>document.querySelector(s);
+const fmt = (n)=> n==null?'—':n.toLocaleString('es-AR',{style:'currency',currency:'ARS'});
 
-      // 2) Verificar que el CDN cargó Chart.js
-      if (!window.Chart) {
-        const e = document.createElement('div');
-        e.className = 'err';
-        e.textContent = '❌ No se pudo cargar Chart.js desde el CDN';
-        document.getElementById('box').appendChild(e);
-        return;
-      }
+async function fetchLive(){
+  try{
+    const r=await fetch(ENDPOINT_LIVE); const data=await r.json();
+    const map={}; for(const it of data) map[it.casa]=it;
+    const tipos=['oficial','bolsa','contadoconliqui','blue','cripto'];
+    $('#cards').innerHTML = tipos.map(t=>{
+      const it=map[t]; if(!it) return '';
+      return `<article class="card"><h3>${it.nombre}</h3><div class="price">${fmt(it.venta)}</div>
+      <div class="muted">Compra: ${fmt(it.compra)} · Venta: ${fmt(it.venta)}</div></article>`;
+    }).join('');
+    renderBrechas(map);
+  }catch(e){ $('#errorMsg').textContent='Error al cargar cotizaciones.'; }
+}
 
-      // 3) Dibujar un gráfico simple (línea)
-      const ctx = document.getElementById('c').getContext('2d');
-      new Chart(ctx, {
-        type: 'line',
-        data: {
-          labels: ['Lun','Mar','Mié','Jue','Vie'],
-          datasets: [{
-            label: 'Prueba Chart.js',
-            data: [1, 3, 2, 5, 4],
-            borderColor: '#3b82f6',
-            backgroundColor: 'rgba(59,130,246,0.2)',
-            pointRadius: 3,
-            tension: 0.2
-          }]
-        },
-        options: { plugins:{ legend:{ labels:{ color:'#111' } } }, scales:{ x:{ticks:{color:'#111'}}, y:{ticks:{color:'#111'}} } }
-      });
-    })();
-  </script>
+function renderBrechas(map){
+  const oficial=map.oficial?.venta||null;
+  const tipos=[['Oficial','oficial'],['MEP','bolsa'],['CCL','contadoconliqui'],['Blue','blue'],['Cripto','cripto']];
+  $('#brechasTbl tbody').innerHTML = tipos.map(([label,key])=>{
+    const it=map[key]; if(!it) return '';
+    const brecha = oficial? ((it.venta - oficial)/oficial*100).toFixed(2)+'%' : '—';
+    return `<tr><td>${label}</td><td>${fmt(it.compra)}</td><td>${fmt(it.venta)}</td><td>${brecha}</td></tr>`;
+  }).join('');
+}
+
+async function fetchHist(){
+  try{
+    const r=await fetch(ENDPOINT_HIST(180)); if(!r.ok) throw new Error();
+    const data=await r.json();
+    const oficial=data.filter(d=>d.type==='Oficial').map(d=>({x:d.day,y:d.value_sell}));
+    renderChart(oficial);
+  }catch(e){ $('#errorMsg').textContent='Error al cargar histórico.'; }
+}
+
+function renderChart(points){
+  const ctx=$('#chart').getContext('2d');
+  new Chart(ctx,{type:'line',data:{datasets:[{label:'Oficial',data:points,borderColor:'#60a5fa'}]},
+    options:{responsive:true,plugins:{legend:{labels:{color:'#e5e7eb'}}},scales:{x:{ticks:{color:'#9ca3af'}},y:{ticks:{color:'#9ca3af'}}}}});
+}
+
+fetchLive(); fetchHist();
+</script>
 </body>
 </html>
-
