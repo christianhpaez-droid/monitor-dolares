@@ -1,11 +1,359 @@
 <!doctype html>
 <html lang="es">
 <head>
-  <meta charset="utf-8">
-  <title>Prueba GitHub Pages</title>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Dólar ARS • Bandas Gobierno + Bollinger (Oficial, MEP, CCL, Blue)</title>
+https://cdn.jsdelivr.net
+https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js</script>
+<style>
+  :root { --bg:#0f172a; --panel:#111827; --text:#e5e7eb; --muted:#9ca3af; --accent:#60a5fa; --ok:#22c55e; --warn:#f59e0b; --bad:#ef4444; --gold:#facc15; --gold2:#fde68a; }
+  *{box-sizing:border-box} body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Arial;background:var(--bg);color:var(--text)}
+  header{padding:16px 20px;background:linear-gradient(90deg,#0b1220,#0f172a);border-bottom:1px solid #1f2937}
+  header h1{margin:0;font-size:20px} header small{color:var(--muted)}
+  .wrap{padding:16px;max-width:1250px;margin:0 auto}
+  .grid{display:grid;gap:14px}
+  .cards{grid-template-columns:repeat(auto-fit,minmax(250px,1fr))}
+  .card,.panel{background:var(--panel);border:1px solid #1f2937;border-radius:12px;padding:14px}
+  .card h3{margin:0 0 8px 0;font-size:14px;color:var(--muted);font-weight:600;letter-spacing:.3px}
+  .price{font-weight:700;font-size:28px}
+  .muted{color:var(--muted);font-size:12px}
+  .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+  label{font-size:12px;color:var(--muted);margin-right:8px} input,select,button{background:#0b1220;color:var(--text);border:1px solid #1f2937;border-radius:8px;padding:8px}
+  button{cursor:pointer;border-color:#334155}
+  table{width:100%;border-collapse:collapse} th,td{border-bottom:1px solid #1f2937;padding:8px 6px;text-align:left;font-size:13px}
+  th{color:var(--muted);font-weight:600}
+  .brecha.pos{color:var(--bad)} .brecha.neg{color:var(--ok)}
+  .hint{color:var(--muted);font-size:12px}
+  .badge{font-size:11px;padding:2px 6px;border-radius:6px;border:1px solid #374151;color:#cbd5e1}
+  .badge.live{border-color:#16a34a;color:#86efac}
+  .series-chip{display:inline-flex;gap:6px;align-items:center;background:#0b1220;border:1px solid #1f2937;border-radius:999px;padding:6px 10px}
+</style>
 </head>
 <body>
-  <h1>Funciona GitHub Pages ✅</h1>
-  <p>Si ves este mensaje, la publicación está OK.</p>
+<header>
+  <h1>Monitor Dólar ARS — Oficial • MEP • CCL • Blue <span class="badge live">LIVE</span></h1>
+  <small>Bandas del Gobierno (Oficial, ±1%/mes desde 11/04/2025) + Bandas de Bollinger auto‑ajustables</small>
+</header>
+
+<div class="wrap grid">
+
+  <!-- Tarjetas: cotizaciones actuales -->
+  <section class="grid cards" id="cards"></section>
+
+  <!-- Brechas vs Oficial -->
+  <section class="panel">
+    <h2 style="margin:0 0 8px 0;font-size:18px;">Brechas vs. Oficial</h2>
+    <div class="hint">Brecha = (Precio − Oficial) / Oficial · 100</div>
+    <div style="overflow:auto">
+      <table id="brechasTbl">
+        <thead><tr><th>Tipo</th><th>Compra</th><th>Venta</th><th>Brecha vs. Oficial (Venta)</th><th>Últ. actualización</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Controles del gráfico -->
+  <section class="panel">
+    <h2 style="margin:0 0 8px 0;font-size:18px;">Gráfico + Bollinger + Bandas Gobierno (Oficial) + Proyección</h2>
+
+    <!-- Selector de series -->
+    <div class="row" style="margin-bottom:10px;">
+      <span class="series-chip"><input type="checkbox" id="sOficial" checked> <label for="sOficial">Oficial</label></span>
+      <span class="series-chip"><input type="checkbox" id="sMEP" checked>     <label for="sMEP">MEP</label></span>
+      <span class="series-chip"><input type="checkbox" id="sCCL" checked>     <label for="sCCL">CCL</label></span>
+      <span class="series-chip"><input type="checkbox" id="sBlue" checked>    <label for="sBlue">Blue</label></span>
+
+      <label for="daysInp">Días (histórico):</label>
+      <input id="daysInp" type="number" min="60" max="540" value="180" />
+
+      <label for="projInp">Proyección (meses):</label>
+      <input id="projInp" type="number" min="0" max="6" value="1" />
+
+      <label for="windowInp">Ventana SMA:</label>
+      <input id="windowInp" type="number" min="5" max="200" value="20" />
+
+      <label for="multInp">k (σ):</label>
+      <input id="multInp" type="number" step="0.1" min="0.5" max="4" value="2" />
+
+      <button id="autoBtn">Auto‑ajustar</button>
+      <button id="reloadBtn">Actualizar gráfico</button>
+    </div>
+
+    <!-- Parámetros de “bandas del gobierno” (sólo Oficial) -->
+    <div class="row" style="margin-bottom:12px;">
+      <strong style="font-size:13px;">Bandas del Gobierno (Oficial):</strong>
+      <label for="govBaseDate">Base:</label>
+      <input id="govBaseDate" type="date" />
+      <label for="govFloor">Piso base (ARS):</label>
+      <input id="govFloor" type="number" step="0.01" />
+      <label for="govCeil">Techo base (ARS):</label>
+      <input id="govCeil" type="number" step="0.01" />
+      <label for="govDrift">Deriva mensual ±%:</label>
+      <input id="govDrift" type="number" step="0.1" value="1" />
+      <label for="govFill">Sombrear banda</label><input id="govFill" type="checkbox" checked />
+      <button id="applyGov">Aplicar</button>
+      <span class="hint">Se trazan líneas de piso/techo (histórico y proyección, con tooltip).</span>
+    </div>
+
+    <div style="position:relative;height:460px">
+      <canvas id="chart"></canvas>
+    </div>
+
+    <div class="hint" style="margin-top:8px">
+      Fuentes: **DolarApi** (live: oficial, blue, MEP, CCL) · **Bluelytics** (histórico oficial/blue) · **ArgentinaDatos** (histórico MEP/CCL).
+    </div>
+  </section>
+
+</div>
+
+<script>
+const $ = (s)=>document.querySelector(s);
+const fmt = (n)=> n==null ? '—' : n.toLocaleString('es-AR',{style:'currency',currency:'ARS',maximumFractionDigits:2});
+const fmtPct = (x)=> (x>0?'+':'') + (x).toFixed(2) + '%';
+
+const ENDPOINT_LIVE = 'https://dolarapi.com/v1/dolares';
+const ENDPOINT_HIST_BLUELYTICS = (days)=>`https://api.bluelytics.com.ar/v2/evolution.json?days=${days}`;
+const ARG_DATA_BASE = 'https://api.argentinadatos.com/v1/cotizaciones/dolares';
+
+let state = {
+  live:null,
+  chart:null,
+  hist:{},
+  gov:{ baseDate:'2025-04-11', floor:1000, ceil:1400, driftPct:1, fill:true } // ±1%/mes desde 11/04/2025
+};
+
+// ---------- Utils ----------
+function rangeDates(endISO, days){ const arr=[]; const end=new Date(endISO);
+  for(let i=days-1;i>=0;i--){ const d=new Date(end); d.setDate(end.getDate()-i); arr.push(d.toISOString().slice(0,10)); } return arr; }
+function addDays(iso, n){ const d=new Date(iso); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); }
+function monthsBetween(baseISO, dateISO){
+  const b=new Date(baseISO), d=new Date(dateISO);
+  const y=d.getFullYear()-b.getFullYear(), m=d.getMonth()-b.getMonth();
+  return y*12 + m + (d.getDate()-b.getDate())/30;
+}
+function sma(arr,w){ const out=new Array(arr.length).fill(null); let sum=0;
+  for(let i=0;i<arr.length;i++){ sum+=arr[i]; if(i>=w) sum-=arr[i-w]; if(i>=w-1) out[i]=sum/w; } return out; }
+function stdev(arr,w,mean){ const out=new Array(arr.length).fill(null);
+  for(let i=0;i<arr.length;i++){ if(i>=w-1){ let s2=0; for(let j=i-w+1;j<=i;j++){ const d=arr[j]-mean[i]; s2+=d*d; } out[i]=Math.sqrt(s2/w); } } return out; }
+
+// ---------- Live ----------
+async function fetchLive(){
+  const r=await fetch(ENDPOINT_LIVE,{cache:'no-store'}); const data=await r.json();
+  const map={}; for(const it of data) map[it.casa]=it;
+  state.live = { oficial:map.oficial||null, blue:map.blue||null, mep:map.bolsa||null, ccl:map.contadoconliqui||null };
+  renderCards(); renderBrechas();
+}
+function renderCards(){
+  const c=$('#cards'), l=state.live;
+  const items=[['oficial','Dólar Oficial'],['mep','Dólar MEP (Bolsa)'],['ccl','Dólar CCL'],['blue','Dólar Blue']];
+  c.innerHTML = items.map(([k,label])=>{
+    const it=l?.[k]; const when=it?.fechaActualizacion? new Date(it.fechaActualizacion).toLocaleString('es-AR'):'—';
+    return `<article class="card"><h3>${label}</h3><div class="price">${fmt(it?.venta)}</div>
+      <div class="muted">Compra: ${fmt(it?.compra)} · Venta: ${fmt(it?.venta)}</div><div class="muted">Act.: ${when}</div></article>`;
+  }).join('');
+}
+function renderBrechas(){
+  const tb=$('#brechasTbl tbody'), l=state.live; if(!l?.oficial?.venta){tb.innerHTML='';return;}
+  const vOf=l.oficial.venta; const rows=[
+    ['Oficial',l.oficial,null],['MEP',l.mep,brecha(l.mep?.venta,vOf)],['CCL',l.ccl,brecha(l.ccl?.venta,vOf)],['Blue',l.blue,brecha(l.blue?.venta,vOf)]
+  ];
+  tb.innerHTML=rows.map(([name,it,b])=>{
+    const when=it?.fechaActualizacion? new Date(it.fechaActualizacion).toLocaleString('es-AR'):'—';
+    const cls=b==null?'':(b>=0?'pos':'neg');
+    return `<tr><td>${name}</td><td>${fmt(it?.compra)}</td><td>${fmt(it?.venta)}</td><td class="brecha ${cls}">${b==null?'—':fmtPct(b)}</td><td>${when}</td></tr>`;
+  }).join('');
+}
+function brecha(x,base){ if(!x||!base) return null; return (x-base)/base*100; }
+
+// ---------- Históricos ----------
+async function fetchHistBluelytics(days,type){
+  const r=await fetch(ENDPOINT_HIST_BLUELYTICS(days),{cache:'no-store'});
+  if(!r.ok) throw new Error('Histórico Bluelytics no disponible');
+  const all=await r.json();
+  const arr=all.filter(d=>d.type===type).sort((a,b)=> new Date(a.day)-new Date(b.day)).map(d=>({date:d.day,value:d.value_sell}));
+  return arr;
+}
+async function fetchHistArgentinaDatos(days,casa){
+  const end=new Date(); const dates=rangeDates(end.toISOString().slice(0,10),days);
+  const maxConc=8, out=[]; let i=0;
+  async function one(dISO){
+    const [Y,M,D]=dISO.split('-'); const url=`${ARG_DATA_BASE}/${casa}/${Y}/${M}/${D}`;
+    const r=await fetch(url,{cache:'no-store'}); if(!r.ok) return null; const j=await r.json();
+    return (j && j.venta!=null) ? {date:dISO,value:j.venta} : null;
+  }
+  while(i<dates.length){
+    const part=await Promise.all(dates.slice(i,i+maxConc).map(d=>one(d).catch(()=>null)));
+    out.push(...part.filter(Boolean)); i+=maxConc;
+  }
+  out.sort((a,b)=> new Date(a.date)-new Date(b.date)); return out;
+}
+
+// ---------- Bandas del Gobierno ----------
+function govBandArrays(labels){
+  const { baseDate,floor,ceil,driftPct }=state.gov; const k=(driftPct??1)/100;
+  const piso=[], techo=[];
+  for(const dt of labels){ const m=monthsBetween(baseDate,dt); piso.push( floor*Math.pow(1-k,m) ); techo.push( ceil*Math.pow(1+k,m) ); }
+  return {piso,techo};
+}
+
+// ---------- Chart ----------
+let chart;
+function upsertDataset(ds,label,data,color,dashed=false){
+  ds.push({label,data,borderColor:color,backgroundColor:'transparent',borderWidth:1.6,pointRadius:0,tension:.15,borderDash: dashed? [6,4]:undefined});
+}
+function verticalTodayPlugin(todayIdx){
+  return { id:'todayLine', afterDatasetsDraw(c){
+    if(todayIdx==null) return;
+    const {ctx,chartArea:{top,bottom},scales:{x}}=c;
+    const xPix=x.getPixelForValue(todayIdx+0.5);
+    ctx.save(); ctx.strokeStyle='rgba(148,163,184,0.6)'; ctx.setLineDash([4,4]); ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(xPix,top); ctx.lineTo(xPix,bottom); ctx.stroke(); ctx.restore();
+  } }
+}
+function govFillPluginFactory(labels, piso, techo, show){
+  return { id:'govFill', beforeDatasetsDraw(chart){
+    if(!show) return; const {scales}=chart; const y=scales.y, x=scales.x;
+    const ctx=chart.ctx; ctx.save(); ctx.fillStyle='rgba(250,204,21,0.10)';
+    for(let i=0;i<labels.length;i++){
+      const x0=x.getPixelForValue(i-0.5), x1=x.getPixelForValue(i+0.5);
+      const yTop=y.getPixelForValue(techo[i]), yBot=y.getPixelForValue(piso[i]);
+      if([x0,x1,yTop,yBot].every(Number.isFinite)){
+        ctx.fillRect(x0, Math.min(yTop,yBot), (x1-x0), Math.abs(yBot-yTop));
+      }
+    }
+    ctx.restore();
+  } }
+}
+function alignSeries(labels, serie){ const map={}; (serie.labels||[]).forEach((d,i)=> map[d]=serie.values[i]); return labels.map(l=> map[l] ?? null); }
+
+function renderChart(){
+  const ctx = $('#chart').getContext('2d'); if(chart) chart.destroy();
+
+  // labels base
+  const order=['Oficial','Blue','MEP','CCL'];
+  const primary = order.find(s=> state.hist[s]?.labels?.length );
+  let labelsHist = state.hist[primary]?.labels || [];
+
+  // Proyección
+  const projMonths = Math.max(0, Math.min(6, +$('#projInp').value || 0));
+  const approxDays = Math.round(projMonths*30);
+  const lastHistDate = labelsHist[labelsHist.length-1] || (new Date()).toISOString().slice(0,10);
+  const labelsProj = []; for(let i=1;i<=approxDays;i++){ labelsProj.push( addDays(lastHistDate, i) ); }
+  const labels = labelsHist.concat(labelsProj);
+
+  const ds = [];
+  const colors={ 'Oficial':'#60a5fa','MEP':'#10b981','CCL':'#f59e0b','Blue':'#a78bfa' };
+
+  ['Oficial','MEP','CCL','Blue'].forEach(name=>{
+    const enabled = (name==='Oficial' && $('#sOficial').checked) ||
+                    (name==='MEP' && $('#sMEP').checked) ||
+                    (name==='CCL' && $('#sCCL').checked) ||
+                    (name==='Blue' && $('#sBlue').checked);
+    if(!enabled || !state.hist[name]) return;
+
+    const alignedHist = alignSeries(labelsHist, state.hist[name]);
+    const values = alignedHist.concat(new Array(labelsProj.length).fill(null));
+    upsertDataset(ds, `${name} (venta)`, values, colors[name], false);
+
+    const w= +$('#windowInp').value || 20, k= +$('#multInp').value || 2;
+    const ma=sma(values,w), sd=stdev(values,w,ma);
+    const up=ma.map((m,i)=> (m!=null && sd[i]!=null) ? m + k*sd[i] : null);
+    const lo=ma.map((m,i)=> (m!=null && sd[i]!=null) ? m - k*sd[i] : null);
+    upsertDataset(ds, `${name} • SMA${w}`, ma, '#94a3b8', true);
+    upsertDataset(ds, `${name} • Upper`, up, 'rgba(148,163,184,0.9)', true);
+    upsertDataset(ds, `${name} • Lower`, lo, 'rgba(148,163,184,0.9)', true);
+  });
+
+  // Bandas Gobierno
+  const {piso,techo}=govBandArrays(labels);
+  const pisoHist=piso.map((v,i)=> i<labelsHist.length? v:null);
+  const pisoProj=piso.map((v,i)=> i>=labelsHist.length? v:null);
+  const techoHist=techo.map((v,i)=> i<labelsHist.length? v:null);
+  const techoProj=techo.map((v,i)=> i>=labelsHist.length? v:null);
+  upsertDataset(ds, 'Gob: Piso (histórico)', pisoHist, '#facc15', false);
+  upsertDataset(ds, 'Gob: Piso (proyección)', pisoProj, '#facc15', true);
+  upsertDataset(ds, 'Gob: Techo (histórico)', techoHist, '#facc15', false);
+  upsertDataset(ds, 'Gob: Techo (proyección)', techoProj, '#facc15', true);
+
+  const todayISO=new Date().toISOString().slice(0,10);
+  const todayIdx=labelsHist.findIndex(d=>d===todayISO);
+  const govFillPlugin=govFillPluginFactory(labels,piso,techo,state.gov.fill);
+
+  chart = new Chart(ctx,{
+    type:'line',
+    data:{ labels, datasets: ds },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
+      plugins:{
+        legend:{ labels:{color:'#cbd5e1'} },
+        tooltip:{ callbacks:{ label:(ctx)=> `${ctx.dataset.label}: ${fmt(ctx.parsed.y)}` } }
+      },
+      scales:{ x:{ ticks:{color:'#9ca3af'}, grid:{color:'#1f2937'} },
+               y:{ ticks:{color:'#9ca3af'}, grid:{color:'#1f2937'} } }
+    },
+    plugins:[govFillPlugin, verticalTodayPlugin(todayIdx>=0?todayIdx:null)]
+  });
+}
+
+// ---------- Carga datos ----------
+async function loadChart(){
+  const days = +$('#daysInp').value || 180;
+  const [ofArr, blArr] = await Promise.all([
+    fetchHistBluelytics(days,'Oficial').catch(()=>[]),
+    fetchHistBluelytics(days,'Blue').catch(()=>[])
+  ]);
+  if(ofArr.length) state.hist['Oficial'] = { labels: ofArr.map(d=>d.date), values: ofArr.map(d=>d.value) };
+  if(blArr.length) state.hist['Blue']    = { labels: blArr.map(d=>d.date), values: blArr.map(d=>d.value) };
+  const [mepArr, cclArr] = await Promise.all([
+    fetchHistArgentinaDatos(days,'bolsa').catch(()=>[]),
+    fetchHistArgentinaDatos(days,'contadoconliqui').catch(()=>[])
+  ]);
+  if(mepArr.length) state.hist['MEP'] = { labels: mepArr.map(d=>d.date), values: mepArr.map(d=>d.value) };
+  if(cclArr.length) state.hist['CCL'] = { labels: cclArr.map(d=>d.date), values: cclArr.map(d=>d.value) };
+  renderChart();
+}
+
+// ---------- Auto ajuste ----------
+function bollingerBreaches(values,w,k){
+  const ma=sma(values,w), sd=stdev(values,w,ma); let n=0,out=0;
+  for(let i=0;i<values.length;i++){
+    if(ma[i]==null||sd[i]==null||values[i]==null) continue; n++;
+    const up=ma[i]+k*sd[i], lo=ma[i]-k*sd[i]; if(values[i]>up||values[i]<lo) out++;
+  }
+  return n? out/n : 1;
+}
+function autoTuneBollinger(){
+  const candidates=['Oficial','MEP','CCL','Blue'].filter(s=> state.hist[s]?.values?.length);
+  if(!candidates.length){ alert('No hay datos para auto‑ajustar.'); return; }
+  const S = state.hist[candidates[0]].values.filter(v=>v!=null);
+  const Ws=[14,20,21,30], Ks=[1.5,1.8,2.0,2.2,2.5]; const target=0.07; let best={w:20,k:2,score:1e9};
+  for(const w of Ws){ for(const k of Ks){
+    const b=bollingerBreaches(S,w,k); const score=Math.abs(b-target)+0.0005*w; if(score<best.score) best={w,k,score};
+  } }
+  $('#windowInp').value=best.w; $('#multInp').value=best.k;
+}
+
+// ---------- UI ----------
+$('#reloadBtn').addEventListener('click', ()=>loadChart());
+$('#autoBtn').addEventListener('click', ()=>{ autoTuneBollinger(); renderChart(); });
+$('#applyGov').addEventListener('click', ()=>{
+  state.gov.baseDate = $('#govBaseDate').value || state.gov.baseDate;
+  state.gov.floor = parseFloat($('#govFloor').value)||state.gov.floor;
+  state.gov.ceil  = parseFloat($('#govCeil').value)||state.gov.ceil;
+  state.gov.driftPct = parseFloat($('#govDrift').value)||1;
+  state.gov.fill = $('#govFill').checked; renderChart();
+});
+['sOficial','sMEP','sCCL','sBlue','projInp'].forEach(id=> $('#'+id).addEventListener('change', ()=> renderChart()));
+
+async function init(){
+  $('#govBaseDate').value = state.gov.baseDate; $('#govFloor').value = state.gov.floor; $('#govCeil').value = state.gov.ceil; $('#govDrift').value = state.gov.driftPct; $('#govFill').checked = state.gov.fill;
+  try{ await fetchLive(); }catch(e){ console.error(e); }
+  try{ await loadChart(); }catch(e){ console.error(e); alert('Error al cargar histórico.'); }
+  setInterval(()=> fetchLive().catch(console.error), 60000);
+}
+init();
+</script>
 </body>
 </html>
