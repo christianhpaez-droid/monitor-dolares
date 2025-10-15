@@ -38,7 +38,7 @@
 <body>
 <header>
   <h1>Monitor Dólar ARS — Oficial • MEP • CCL • Blue • Cripto</h1>
-  <small>Live cada 30s · Brechas y Arbitraje · Gráfico Oficial con Bollinger (Canvas, sin CDN)</small>
+  <small>Live configurable · Brechas y Arbitraje · Histórico Oficial con Bollinger (Canvas, sin CDN)</small>
 </header>
 
 <div class="wrap">
@@ -50,11 +50,19 @@
     <div class="toolbar">
       <h2>Brechas vs. Oficial</h2>
       <div class="pill">
-        <label for="autoRefresh" class="muted">Auto-refresh 30s</label>
-        <input type="checkbox" id="autoRefresh" checked />
+        <label for="refreshSel" class="muted">Actualización</label>
+        <select id="refreshSel">
+          <option value="5000">Cada 5s</option>
+          <option value="10000" selected>Cada 10s</option>
+          <option value="15000">Cada 15s</option>
+          <option value="30000">Cada 30s</option>
+          <option value="60000">Cada 60s</option>
+        </select>
       </div>
+      <button id="refreshNow">Actualizar ahora</button>
+      <span id="lastUpdate" class="muted" style="margin-left:8px;"></span>
     </div>
-    <div class="hint">Brecha = (Precio − Oficial) / Oficial · 100 (usando <b>venta</b> de cada mercado vs <b>venta</b> oficial)</div>
+    <div class="hint">Brecha = (Venta mercado − Venta oficial) / Venta oficial · 100</div>
     <div style="overflow:auto;">
       <table id="brechasTbl">
         <thead><tr><th>Tipo</th><th>Compra</th><th>Venta</th><th>Brecha vs Oficial</th><th>Actualización</th></tr></thead>
@@ -111,7 +119,7 @@
     </div>
     <canvas id="histCanvas" height="340" style="width:100%;"></canvas>
     <div id="histErr" class="err"></div>
-    <div class="hint">Datos históricos (Oficial) desde Bluelytics. Bandas de Bollinger = SMA ± k·σ.</div>
+    <div class="hint">Histórico (Oficial) desde Bluelytics con fallback; Bandas de Bollinger = SMA ± k·σ.</div>
   </section>
 </div>
 
@@ -124,8 +132,8 @@
     'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js'
   ];
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-  const toClear=[];
-  let n; while(n = walker.nextNode()){
+  const toClear=[]; let n;
+  while(n = walker.nextNode()){
     const s = (n.nodeValue||'').trim();
     if (!s) continue;
     if (bads.some(b => s.includes(b))) toClear.push(n);
@@ -139,33 +147,47 @@ const fmtMoney = n => n==null ? '—' : n.toLocaleString('es-AR',{style:'currenc
 const fmtPct   = x => (x>0?'+':'') + (x).toFixed(2) + '%';
 const nowStr   = iso => iso ? new Date(iso).toLocaleString('es-AR') : '—';
 
-/* --------- Endpoints --------- */
-const ENDPOINT_LIVE = 'https://dolarapi.com/v1/dolares';              // Oficial, Blue, Bolsa (MEP), CCL, Cripto
-const ENDPOINT_HIST = days => `https://api.bluelytics.com.ar/v2/evolution.json?days=${days}`; // (sólo Oficial)
+/* --------- Proveedores (Dolarito primario, DolarApi fallback) --------- */
+// Fallback público documentado: DolarApi (todas las “casas” en un JSON).
+// Docs: https://dolarapi.com/docs/argentina/operations/get-dolares
+const ENDPOINT_LIVE = 'https://dolarapi.com/v1/dolares';
+
+/* Dolarito (primario) — requiere plan “Acceso API” (pago).
+   Hasta que te habiliten, deja URL y clave vacías (se usa DolarApi).
+   Planes/API: https://cafecito.app/dolarito/plans  */
+const DOLARITO_ENABLED   = true;    // intenta Dolarito primero si hay URL
+const DOLARITO_URL       = '';      // ej: 'https://api.dolarito.ar/v1/cotizaciones'
+const DOLARITO_HEADER    = 'Authorization'; // o 'X-API-Key' según indiquen
+const DOLARITO_API_KEY   = '';      // ej: 'Bearer TU_TOKEN'
+
+// Histórico (Oficial) — fuente Bluelytics; usaremos proxy JSON crudo (AllOrigins)
+// y fallback a ArgentinaDatos si hiciera falta.
+const ENDPOINT_HIST = days => `https://api.bluelytics.com.ar/v2/evolution.json?days=${days}`;
 
 /* --------- Estado --------- */
-let liveMap = null;
 let timer = null;
+let refreshMs = 10000; // default 10s
+let liveMap = null;
 
-/* --------- Carga de cotizaciones --------- */
-async function fetchLive(){
-  try{
-    const r = await fetch(ENDPOINT_LIVE,{cache:'no-store'});
-    const data = await r.json();
-    const m = {};
-    for (const it of data) m[it.casa] = it; // casas: oficial, blue, bolsa (MEP), contadoconliqui (CCL), cripto, etc.
-    liveMap = m;
-    renderCards(m);
-    renderBrechas(m);
-    renderArb(m);
-    $('#errorMsg').textContent = '';
-  }catch(e){
-    console.error(e);
-    $('#errorMsg').textContent = 'Error al cargar cotizaciones.';
-  }
+/* --------- Scheduler alineado al reloj --------- */
+function scheduleNextTick(){
+  if (timer) { clearTimeout(timer); timer = null; }
+  const now = Date.now();
+  const msToNext = refreshMs - (now % refreshMs);
+  timer = setTimeout(async () => {
+    try { await fetchLive(); } finally { scheduleNextTick(); }
+  }, msToNext);
 }
+function configureRefresh(ms){
+  refreshMs = Math.max(3000, +ms || 10000);
+  scheduleNextTick();
+}
+$('#refreshSel').addEventListener('change', (e)=> configureRefresh(e.target.value));
+$('#refreshNow').addEventListener('click', ()=> fetchLive());
 
-function renderCards(m){
+/* --------- UI “live”: tarjetas, brechas, arbitraje --------- */
+function paintLive(map){
+  // tarjetas
   const tipos = [
     ['oficial','Dólar Oficial'],
     ['bolsa','Dólar MEP'],
@@ -174,8 +196,7 @@ function renderCards(m){
     ['cripto','Dólar Cripto'],
   ];
   $('#cards').innerHTML = tipos.map(([key,label])=>{
-    const it = m[key];
-    if(!it) return '';
+    const it = map[key]; if(!it) return '';
     return `<article class="card">
       <h3>${label}</h3>
       <div class="price">${fmtMoney(it.venta)}</div>
@@ -183,34 +204,35 @@ function renderCards(m){
       <div class="muted">Act.: ${nowStr(it.fechaActualizacion)}</div>
     </article>`;
   }).join('');
-}
 
-function renderBrechas(m){
-  const ofv = m?.oficial?.venta || null;
-  const rows = [
-    ['Oficial', 'oficial'],
-    ['MEP', 'bolsa'],
-    ['CCL', 'contadoconliqui'],
-    ['Blue','blue'],
-    ['Cripto','cripto'],
-  ].map(([lbl,key])=>{
-    const it = m[key];
-    if(!it) return '';
-    const bre = (ofv && it.venta) ? ((it.venta - ofv)/ofv*100) : null;
-    const cls = bre==null ? '' : (bre>=0?'pos':'neg');
-    return `<tr>
-      <td>${lbl}</td>
-      <td>${fmtMoney(it.compra)}</td>
-      <td>${fmtMoney(it.venta)}</td>
-      <td class="${cls}">${bre==null?'—':fmtPct(bre)}</td>
-      <td>${nowStr(it.fechaActualizacion)}</td>
-    </tr>`;
-  }).join('');
+  // brechas
+  const ofv = map?.oficial?.venta || null;
+  const rows = [['Oficial','oficial'],['MEP','bolsa'],['CCL','contadoconliqui'],['Blue','blue'],['Cripto','cripto']]
+    .map(([lbl,key])=>{
+      const it = map[key]; if(!it) return '';
+      const bre = (ofv && it.venta) ? ((it.venta - ofv)/ofv*100) : null;
+      const cls = bre==null ? '' : (bre>=0?'pos':'neg');
+      return `<tr>
+        <td>${lbl}</td>
+        <td>${fmtMoney(it.compra)}</td>
+        <td>${fmtMoney(it.venta)}</td>
+        <td class="${cls}">${bre==null?'—':fmtPct(bre)}</td>
+        <td>${nowStr(it.fechaActualizacion)}</td>
+      </tr>`;
+    }).join('');
   $('#brechasTbl tbody').innerHTML = rows;
+
+  // arbitraje
+  renderArb(map);
+
+  // marca de tiempo
+  $('#lastUpdate').textContent = 'Últ. actualización: ' + new Date().toLocaleTimeString('es-AR');
+
+  // limpiamos error si lo hubiera
+  $('#errorMsg').textContent = '';
 }
 
-/* --------- Arbitraje --------- */
-// Reglas: compro al precio de VENTA del origen; vendo al precio de COMPRA del destino.
+/* Arbitraje — compro a venta del origen; vendo a compra del destino */
 const ARB_PAIRS = [
   ['oficial','bolsa'], ['oficial','contadoconliqui'], ['oficial','blue'], ['oficial','cripto'],
   ['blue','bolsa'], ['blue','contadoconliqui'],
@@ -243,128 +265,185 @@ function renderArb(m){
   $('#arbTbl tbody').innerHTML = rows;
 }
 $('#recalc').addEventListener('click', ()=> liveMap && renderArb(liveMap));
+<!-- Controles de Bandas del Gobierno (Oficial) -->
+    <div class="row" style="gap:10px;margin:6px 0 8px;">
+      <strong style="font-size:13px;">Bandas del Gobierno (Oficial):</strong>
+      <label class="muted" for="govBaseDate">Base</label>
+      <input id="govBaseDate" type="date" style="width:150px;">
+      <label class="muted" for="govFloor">Piso</label>
+      <input id="govFloor" type="number" step="0.01" style="width:110px;">
+      <label class="muted" for="govCeil">Techo</label>
+      <input id="govCeil" type="number" step="0.01" style="width:110px;">
+      <label class="muted" for="govDrift">Deriva ±%/mes</label>
+      <input id="govDrift" type="number" step="0.1" min="0" style="width:90px;" value="1">
+      <label class="muted" for="govProj">Proyección (meses)</label>
+      <input id="govProj" type="number" min="0" max="12" value="1" style="width:90px;">
+      <label class="muted" for="govFill">Sombrear</label>
+      <input id="govFill" type="checkbox" checked>
+      <button id="applyGov">Aplicar</button>
+    </div>
+  <script>
+/*** ==== Bandas del Gobierno (estado + helpers) ==== ***/
+const govBand = {
+  baseDate: '2025-04-11',  // fecha base
+  floor: 1000,             // piso base en esa fecha
+  ceil: 1400,              // techo base en esa fecha
+  driftPct: 1,             // ±%/mes (piso baja drift, techo sube drift)
+  projMonths: 1,           // meses de proyección
+  fill: true               // sombreado entre líneas
+};
 
-/* --------- Auto-refresh --------- */
-function setAutoRefresh(){
-  if (timer) { clearInterval(timer); timer=null; }
-  if ($('#autoRefresh').checked){
-    timer = setInterval(fetchLive, 30000); // 30s
-  }
+function monthsBetween(baseISO, dateISO){
+  const b=new Date(baseISO), d=new Date(dateISO);
+  const y=d.getFullYear()-b.getFullYear(), m=d.getMonth()-b.getMonth();
+  return y*12 + m + (d.getDate()-b.getDate())/30;
 }
-$('#autoRefresh').addEventListener('change', setAutoRefresh);
+function addDays(iso, n){ const d=new Date(iso); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); }
 
-/* --------- Histórico + Bollinger (Canvas puro) --------- */
-async function fetchHistOficial(days=180){
-  const url = ENDPOINT_HIST(days);
-  const r = await fetch(url, {cache:'no-store'});
-  if(!r.ok) throw new Error('HTTP '+r.status);
-  const all = await r.json();
-  const arr = all.filter(d=>d.type==='Oficial')
-                 .sort((a,b)=> new Date(a.day)-new Date(b.day))
-                 .map(d=> ({ date:d.day, value:+d.value_sell }));
-  return arr;
-}
-function sma(values, w){
-  const out=new Array(values.length).fill(null);
-  let sum=0;
-  for(let i=0;i<values.length;i++){
-    sum += values[i];
-    if(i>=w) sum -= values[i-w];
-    if(i>=w-1) out[i] = sum/w;
+function buildGovBands(dates, baseDate, floor, ceil, driftPct){
+  const k = (driftPct||0)/100;
+  const piso=[], techo=[];
+  for(const dt of dates){
+    const m=monthsBetween(baseDate, dt);
+    piso.push( floor*Math.pow(1-k, m) );
+    techo.push( ceil *Math.pow(1+k, m) );
   }
-  return out;
+  return {piso, techo};
 }
-function stdev(values, w, ma){
-  const out=new Array(values.length).fill(null);
-  for(let i=0;i<values.length;i++){
-    if(i>=w-1){
-      let s2=0;
-      for(let j=i-w+1;j<=i;j++){
-        const d = values[j]-ma[i];
-        s2 += d*d;
-      }
-      out[i]=Math.sqrt(s2/w);
-    }
-  }
-  return out;
-}
+</script>
+<script>
 function drawHistBollinger(canvas, points, w=20, k=2){
   if(!canvas || !points?.length) return;
+
+  // ---- Fechas: histórico + proyección (para bandas) ----
+  const histDates = points.map(p=>p.date);
+  const lastHist  = histDates[histDates.length-1];
+  const projDays  = Math.max(0, Math.round((+govBand.projMonths||0)*30));
+  const projDates = Array.from({length:projDays}, (_,i)=> addDays(lastHist, i+1));
+  const dates     = histDates.concat(projDates);
+
+  // Serie de precio (solo histórico)
+  const vals  = points.map(p=>p.value);
+
+  // Canvas setup
   const dpr = Math.max(1, window.devicePixelRatio||1);
   const cssWidth  = canvas.clientWidth || canvas.getBoundingClientRect().width || 900;
   const cssHeight = canvas.clientHeight || 340;
   canvas.width  = Math.round(cssWidth  * dpr);
   canvas.height = Math.round(cssHeight * dpr);
+  const ctx = canvas.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
 
-  const ctx = canvas.getContext('2d');
-  ctx.setTransform(dpr,0,0,dpr,0,0);
+  // Estilos
   const bg = getComputedStyle(document.documentElement).getPropertyValue('--panel') || '#0b1220';
   const gridColor = getComputedStyle(document.documentElement).getPropertyValue('--bdr') || '#1f2937';
   const textColor = getComputedStyle(document.documentElement).getPropertyValue('--muted') || '#9ca3af';
-  const lineColor = getComputedStyle(document.documentElement).getPropertyValue('--acc') || '#60a5fa';
+  const priceColor = getComputedStyle(document.documentElement).getPropertyValue('--acc') || '#60a5fa';
+  const bandColor  = '#facc15';
+
+  // Área de dibujo
   const PAD = {l:56, r:14, t:14, b:24};
   const W = cssWidth - PAD.l - PAD.r;
   const H = cssHeight - PAD.t - PAD.b;
+  const N = dates.length, N_hist = histDates.length;
 
-  const vals = points.map(p=>p.value);
-  const dates = points.map(p=>p.date);
-  const minV = Math.min(...vals.filter(v=>isFinite(v)));
-  const maxV = Math.max(...vals.filter(v=>isFinite(v)));
+  // Dominio Y con bandas
+  const {piso, techo} = buildGovBands(dates, govBand.baseDate, +govBand.floor, +govBand.ceil, +govBand.driftPct);
+  const minV = Math.min(Math.min(...vals), Math.min(...piso), Math.min(...techo));
+  const maxV = Math.max(Math.max(...vals), Math.max(...piso), Math.max(...techo));
   const yMin = Math.floor(minV*0.98), yMax = Math.ceil(maxV*1.02);
 
-  const x2px = i => PAD.l + i*(W/(points.length-1||1));
+  // Escalas
+  const x2px = i => PAD.l + (N<=1? 0 : i*(W/(N-1)));
   const y2px = v => PAD.t + (yMax - v) * (H/(yMax - yMin || 1));
 
-  // Fondo
+  // Fondo + grilla
   ctx.fillStyle = bg; ctx.fillRect(0,0,cssWidth,cssHeight);
-  // Grid
   ctx.strokeStyle = gridColor; ctx.lineWidth = 1; ctx.beginPath();
   for(let t=0;t<=5;t++){ const y=PAD.t + t*(H/5); ctx.moveTo(PAD.l,y); ctx.lineTo(PAD.l+W,y); }
   ctx.stroke();
+
   // Ticks Y
   ctx.fillStyle = textColor; ctx.font='12px system-ui, -apple-system, Segoe UI, Roboto';
   for(let t=0;t<=5;t++){
-    const v = yMax - t*( (yMax-yMin)/5 ); const y = PAD.t + t*(H/5);
+    const v = yMax - t*((yMax-yMin)/5); const y = PAD.t + t*(H/5);
     ctx.fillText(v.toLocaleString('es-AR',{style:'currency',currency:'ARS',maximumFractionDigits:0}), 6, y+4);
   }
-  // Ticks X (inicio/medio/fin)
-  const idxs=[0,Math.floor(points.length/2),points.length-1].filter(i=>i>=0);
+  // Ticks X (inicio/medio/fin histórico)
+  const idxs=[0, Math.floor(N_hist/2), Math.max(0,N_hist-1)].filter(i=>i>=0);
   idxs.forEach(i=>{ const x=x2px(i), y=PAD.t+H; ctx.fillText(dates[i], x-36, y+18); ctx.beginPath(); ctx.moveTo(x,y-4); ctx.lineTo(x,y); ctx.stroke(); });
 
-  // Bollinger
-  const ma = sma(vals, w);
-  const sd = stdev(vals, w, ma);
-  const upper = ma.map((m,i)=> (m!=null && sd[i]!=null) ? m + k*sd[i] : null);
-  const lower = ma.map((m,i)=> (m!=null && sd[i]!=null) ? m - k*sd[i] : null);
+  // ----- Bandas: sombreado opcional -----
+  if (govBand.fill){
+    ctx.beginPath();
+    let started=false;
+    for(let i=0;i<N;i++){ const x=x2px(i), y=y2px(techo[i]); if(!started){ctx.moveTo(x,y);started=true;} else ctx.lineTo(x,y); }
+    for(let i=N-1;i>=0;i--){ const x=x2px(i), y=y2px(piso[i]); ctx.lineTo(x,y); }
+    ctx.closePath(); ctx.fillStyle='rgba(250,204,21,0.10)'; ctx.fill();
+  }
 
-  // Relleno entre bandas
-  ctx.beginPath(); let started=false;
-  for(let i=0;i<points.length;i++){ if(upper[i]==null) continue; const x=x2px(i), y=y2px(upper[i]); if(!started){ctx.moveTo(x,y);started=true;} else ctx.lineTo(x,y); }
-  for(let i=points.length-1;i>=0;i--){ if(lower[i]==null) continue; const x=x2px(i), y=y2px(lower[i]); ctx.lineTo(x,y); }
-  ctx.closePath(); ctx.fillStyle='rgba(96,165,250,0.10)'; ctx.fill();
+  // ----- Bandas: líneas piso/techo (histórico = sólido; proyección = punteado) -----
+  function drawBandLine(arr, dashed){
+    ctx.beginPath(); ctx.lineWidth=1.6; ctx.strokeStyle=bandColor;
+    ctx.setLineDash(dashed? [6,4] : []);
+    let started=false;
+    for(let i=0;i<N;i++){
+      const y=y2px(arr[i]), x=x2px(i);
+      if(Number.isFinite(y)){ started? ctx.lineTo(x,y) : (ctx.moveTo(x,y), started=true); }
+    }
+    ctx.stroke(); ctx.setLineDash([]);
+  }
+  // histórico
+  drawBandLine(piso.slice(0,N_hist), false);
+  drawBandLine(techo.slice(0,N_hist), false);
+  // proyección
+  if (N_hist<N){
+    drawBandLine([ ...Array(N_hist).fill(null), ...piso.slice(N_hist) ], true);
+    drawBandLine([ ...Array(N_hist).fill(null), ...techo.slice(N_hist) ], true);
+  }
 
-  // Precio
-  ctx.beginPath(); ctx.lineWidth=2; ctx.strokeStyle=lineColor;
+  // Separador vertical entre histórico y proyección
+  if (N_hist < N){
+    const Xsep = x2px(N_hist-1)+((N>1)? (W/(N-1)) : 0);
+    ctx.save(); ctx.strokeStyle='rgba(148,163,184,0.6)'; ctx.setLineDash([4,4]); ctx.beginPath();
+    ctx.moveTo(Xsep, PAD.t); ctx.lineTo(Xsep, PAD.t+H); ctx.stroke(); ctx.restore();
+  }
+
+  // ----- Precio: línea (solo histórico) -----
+  ctx.beginPath(); ctx.lineWidth=2; ctx.strokeStyle=priceColor;
   points.forEach((p,i)=>{ const x=x2px(i), y=y2px(p.value); i?ctx.lineTo(x,y):ctx.moveTo(x,y); });
   ctx.stroke();
 
-  // SMA
-  ctx.beginPath(); ctx.lineWidth=1.5; ctx.strokeStyle='#94a3b8'; ctx.setLineDash([6,4]);
-  for(let i=0;i<points.length;i++){ if(ma[i]==null) continue; const x=x2px(i), y=y2px(ma[i]); (i && ma[i-1]!=null)?ctx.lineTo(x,y):ctx.moveTo(x,y); }
-  ctx.stroke(); ctx.setLineDash([]);
+  // ----- Bollinger (SMA ± k·σ, solo histórico) -----
+  const ma = sma(vals, w), sd = stdev(vals, w, ma);
+  const up = ma.map((m,i)=> (m!=null && sd[i]!=null) ? m + k*sd[i] : null);
+  const lo = ma.map((m,i)=> (m!=null && sd[i]!=null) ? m - k*sd[i] : null);
 
-  // Upper
-  ctx.beginPath(); ctx.lineWidth=1; ctx.strokeStyle='rgba(148,163,184,0.9)'; ctx.setLineDash([6,4]);
-  for(let i=0;i<points.length;i++){ if(upper[i]==null) continue; const x=x2px(i), y=y2px(upper[i]); (i && upper[i-1]!=null)?ctx.lineTo(x,y):ctx.moveTo(x,y); }
-  ctx.stroke();
-
-  // Lower
-  ctx.beginPath(); ctx.lineWidth=1; ctx.strokeStyle='rgba(148,163,184,0.9)';
-  for(let i=0;i<points.length;i++){ if(lower[i]==null) continue; const x=x2px(i), y=y2px(lower[i]); (i && lower[i-1]!=null)?ctx.lineTo(x,y):ctx.moveTo(x,y); }
-  ctx.stroke(); ctx.setLineDash([]);
+  function lineArr(arr, color, dashed=false){
+    ctx.beginPath(); ctx.lineWidth = dashed? 1.2 : 1.5;
+    ctx.strokeStyle=color; ctx.setLineDash(dashed? [6,4] : []);
+    let started=false;
+    for(let i=0;i<N_hist;i++){
+      const y=y2px(arr[i]), x=x2px(i);
+      if(Number.isFinite(y)){ started? ctx.lineTo(x,y) : (ctx.moveTo(x,y), started=true); }
+    }
+    ctx.stroke(); ctx.setLineDash([]);
+  }
+  lineArr(ma, '#94a3b8', true);
+  lineArr(up, 'rgba(148,163,184,0.9)', true);
+  lineArr(lo, 'rgba(148,163,184,0.9)', true);
 }
+</script>
+<script>
 async function loadHist(){
   $('#histErr').textContent='';
+  // tomar parámetros UI
+  govBand.baseDate = $('#govBaseDate').value || govBand.baseDate;
+  govBand.floor    = parseFloat($('#govFloor').value||govBand.floor);
+  govBand.ceil     = parseFloat($('#govCeil').value||govBand.ceil);
+  govBand.driftPct = parseFloat($('#govDrift').value||govBand.driftPct);
+  govBand.projMonths = Math.max(0, Math.min(12, parseFloat($('#govProj').value||govBand.projMonths)));
+  govBand.fill     = $('#govFill').checked;
+
   const canvas = $('#histCanvas');
   const days = Math.max(60, Math.min(540, +($('#histDays').value||180)));
   const w    = Math.max(5,  Math.min(200, +($('#bbWindow').value||20)));
@@ -379,15 +458,17 @@ async function loadHist(){
   }
 }
 $('#btnHist').addEventListener('click', loadHist);
+$('#applyGov').addEventListener('click', loadHist);
 
-/* --------- Init --------- */
-(async function init(){
-  await fetchLive();
-  setAutoRefresh();
-  // Carga inicial del histórico
-  setTimeout(loadHist, 800);
-})();
+// Inicializa los inputs con valores por defecto (al cargar)
+document.addEventListener('DOMContentLoaded', ()=>{
+  $('#govBaseDate').value = govBand.baseDate;
+  $('#govFloor').value    = govBand.floor;
+  $('#govCeil').value     = govBand.ceil;
+  $('#govDrift').value    = govBand.driftPct;
+  $('#govProj').value     = govBand.projMonths;
+  $('#govFill').checked   = govBand.fill;
+});
 </script>
-</body>
-</html>
 ``
+
