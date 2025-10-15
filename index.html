@@ -38,7 +38,7 @@
 <body>
 <header>
   <h1>Monitor Dólar ARS — Oficial • MEP • CCL • Blue • Cripto</h1>
-  <small>Live cada 30s · Brechas y Arbitraje · Sin dependencias externas</small>
+  <small>Live cada 30s · Brechas y Arbitraje · Gráfico Oficial con Bollinger (Canvas, sin CDN)</small>
 </header>
 
 <div class="wrap">
@@ -90,10 +90,33 @@
       </table>
     </div>
   </section>
+
+  <!-- Histórico (Oficial) + Bollinger -->
+  <section class="panel" id="panelHist">
+    <div class="toolbar">
+      <h2>Histórico Oficial + Bollinger</h2>
+      <div class="pill">
+        <label class="muted" for="histDays">Días</label>
+        <input type="number" id="histDays" min="60" max="540" value="180" style="width:90px;">
+      </div>
+      <div class="pill">
+        <label class="muted" for="bbWindow">SMA ventana</label>
+        <input type="number" id="bbWindow" min="5" max="200" value="20" style="width:100px;">
+      </div>
+      <div class="pill">
+        <label class="muted" for="bbK">k σ</label>
+        <input type="number" id="bbK" step="0.1" min="0.5" max="4" value="2" style="width:70px;">
+      </div>
+      <button id="btnHist">Actualizar</button>
+    </div>
+    <canvas id="histCanvas" height="340" style="width:100%;"></canvas>
+    <div id="histErr" class="err"></div>
+    <div class="hint">Datos históricos (Oficial) desde Bluelytics. Bandas de Bollinger = SMA ± k·σ.</div>
+  </section>
 </div>
 
 <script>
-/* --------- 1) Limpieza de textos sueltos tipo CDN (si quedaron en el HTML) --------- */
+/* --------- Limpieza de textos sueltos tipo CDN --------- */
 (function scrubRogueText(){
   const bads = [
     'https://cdn.jsdelivr.net', 
@@ -110,27 +133,27 @@
   toClear.forEach(n => n.nodeValue = '');
 })();
 
-/* --------- 2) Utilidades --------- */
+/* --------- Utils --------- */
 const $ = s => document.querySelector(s);
 const fmtMoney = n => n==null ? '—' : n.toLocaleString('es-AR',{style:'currency',currency:'ARS',maximumFractionDigits:2});
 const fmtPct   = x => (x>0?'+':'') + (x).toFixed(2) + '%';
 const nowStr   = iso => iso ? new Date(iso).toLocaleString('es-AR') : '—';
 
-/* --------- 3) Endpoints --------- */
+/* --------- Endpoints --------- */
 const ENDPOINT_LIVE = 'https://dolarapi.com/v1/dolares';              // Oficial, Blue, Bolsa (MEP), CCL, Cripto
-const ENDPOINT_HIST = days => `https://api.bluelytics.com.ar/v2/evolution.json?days=${days}`; // (por si lo usamos luego)
+const ENDPOINT_HIST = days => `https://api.bluelytics.com.ar/v2/evolution.json?days=${days}`; // (sólo Oficial)
 
-/* --------- 4) Estado --------- */
+/* --------- Estado --------- */
 let liveMap = null;
 let timer = null;
 
-/* --------- 5) Carga de cotizaciones --------- */
+/* --------- Carga de cotizaciones --------- */
 async function fetchLive(){
   try{
     const r = await fetch(ENDPOINT_LIVE,{cache:'no-store'});
     const data = await r.json();
     const m = {};
-    for (const it of data) m[it.casa] = it; // casas: oficial, blue, bolsa (MEP), contadoconliqui (CCL), cripto, mayorista, etc.
+    for (const it of data) m[it.casa] = it; // casas: oficial, blue, bolsa (MEP), contadoconliqui (CCL), cripto, etc.
     liveMap = m;
     renderCards(m);
     renderBrechas(m);
@@ -186,36 +209,27 @@ function renderBrechas(m){
   $('#brechasTbl tbody').innerHTML = rows;
 }
 
-/* --------- 6) Arbitraje --------- */
+/* --------- Arbitraje --------- */
 // Reglas: compro al precio de VENTA del origen; vendo al precio de COMPRA del destino.
 const ARB_PAIRS = [
-  ['oficial','bolsa'],             // Oficial -> MEP
-  ['oficial','contadoconliqui'],   // Oficial -> CCL
-  ['oficial','blue'],              // Oficial -> Blue
-  ['oficial','cripto'],            // Oficial -> Cripto
-  ['blue','bolsa'],                // Blue -> MEP
-  ['blue','contadoconliqui'],      // Blue -> CCL
-  ['cripto','bolsa'],              // Cripto -> MEP
-  ['cripto','contadoconliqui'],    // Cripto -> CCL
-  ['bolsa','contadoconliqui'],     // MEP -> CCL
-  ['contadoconliqui','bolsa'],     // CCL -> MEP
+  ['oficial','bolsa'], ['oficial','contadoconliqui'], ['oficial','blue'], ['oficial','cripto'],
+  ['blue','bolsa'], ['blue','contadoconliqui'],
+  ['cripto','bolsa'], ['cripto','contadoconliqui'],
+  ['bolsa','contadoconliqui'], ['contadoconliqui','bolsa'],
 ];
-
-const LABEL = {
-  oficial:'Oficial', bolsa:'MEP', contadoconliqui:'CCL', blue:'Blue', cripto:'Cripto'
-};
+const LABEL = {oficial:'Oficial', bolsa:'MEP', contadoconliqui:'CCL', blue:'Blue', cripto:'Cripto'};
 
 function renderArb(m){
   const fee = parseFloat($('#feePct').value||'0')/100;
   const ticket = Math.max(1000, parseFloat($('#ticket').value||'100000'));
   const rows = ARB_PAIRS.map(([src,dst])=>{
     const a = m[src], b = m[dst]; if(!a||!b) return '';
-    const buy = a.venta;    // precio que pago
-    const sell = b.compra;  // precio que recibo
+    const buy = a.venta;    // pago
+    const sell = b.compra;  // recibo
     if(!buy||!sell) return '';
-    const gross = (sell - buy)/buy;    // %
-    const net   = gross - fee;         // %
-    const earn  = Math.max(0, net) * ticket; // ARS estimados por ticket (sin slippage adicional)
+    const gross = (sell - buy)/buy;
+    const net   = gross - fee;
+    const earn  = Math.max(0, net) * ticket;
     const cls   = net>=0 ? 'pos':'neg';
     return `<tr>
       <td>${LABEL[src]}</td><td>${LABEL[dst]}</td>
@@ -228,10 +242,9 @@ function renderArb(m){
   }).join('');
   $('#arbTbl tbody').innerHTML = rows;
 }
-
 $('#recalc').addEventListener('click', ()=> liveMap && renderArb(liveMap));
 
-/* --------- 7) Auto-refresh --------- */
+/* --------- Auto-refresh --------- */
 function setAutoRefresh(){
   if (timer) { clearInterval(timer); timer=null; }
   if ($('#autoRefresh').checked){
@@ -240,11 +253,141 @@ function setAutoRefresh(){
 }
 $('#autoRefresh').addEventListener('change', setAutoRefresh);
 
-/* --------- 8) Init --------- */
+/* --------- Histórico + Bollinger (Canvas puro) --------- */
+async function fetchHistOficial(days=180){
+  const url = ENDPOINT_HIST(days);
+  const r = await fetch(url, {cache:'no-store'});
+  if(!r.ok) throw new Error('HTTP '+r.status);
+  const all = await r.json();
+  const arr = all.filter(d=>d.type==='Oficial')
+                 .sort((a,b)=> new Date(a.day)-new Date(b.day))
+                 .map(d=> ({ date:d.day, value:+d.value_sell }));
+  return arr;
+}
+function sma(values, w){
+  const out=new Array(values.length).fill(null);
+  let sum=0;
+  for(let i=0;i<values.length;i++){
+    sum += values[i];
+    if(i>=w) sum -= values[i-w];
+    if(i>=w-1) out[i] = sum/w;
+  }
+  return out;
+}
+function stdev(values, w, ma){
+  const out=new Array(values.length).fill(null);
+  for(let i=0;i<values.length;i++){
+    if(i>=w-1){
+      let s2=0;
+      for(let j=i-w+1;j<=i;j++){
+        const d = values[j]-ma[i];
+        s2 += d*d;
+      }
+      out[i]=Math.sqrt(s2/w);
+    }
+  }
+  return out;
+}
+function drawHistBollinger(canvas, points, w=20, k=2){
+  if(!canvas || !points?.length) return;
+  const dpr = Math.max(1, window.devicePixelRatio||1);
+  const cssWidth  = canvas.clientWidth || canvas.getBoundingClientRect().width || 900;
+  const cssHeight = canvas.clientHeight || 340;
+  canvas.width  = Math.round(cssWidth  * dpr);
+  canvas.height = Math.round(cssHeight * dpr);
+
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  const bg = getComputedStyle(document.documentElement).getPropertyValue('--panel') || '#0b1220';
+  const gridColor = getComputedStyle(document.documentElement).getPropertyValue('--bdr') || '#1f2937';
+  const textColor = getComputedStyle(document.documentElement).getPropertyValue('--muted') || '#9ca3af';
+  const lineColor = getComputedStyle(document.documentElement).getPropertyValue('--acc') || '#60a5fa';
+  const PAD = {l:56, r:14, t:14, b:24};
+  const W = cssWidth - PAD.l - PAD.r;
+  const H = cssHeight - PAD.t - PAD.b;
+
+  const vals = points.map(p=>p.value);
+  const dates = points.map(p=>p.date);
+  const minV = Math.min(...vals.filter(v=>isFinite(v)));
+  const maxV = Math.max(...vals.filter(v=>isFinite(v)));
+  const yMin = Math.floor(minV*0.98), yMax = Math.ceil(maxV*1.02);
+
+  const x2px = i => PAD.l + i*(W/(points.length-1||1));
+  const y2px = v => PAD.t + (yMax - v) * (H/(yMax - yMin || 1));
+
+  // Fondo
+  ctx.fillStyle = bg; ctx.fillRect(0,0,cssWidth,cssHeight);
+  // Grid
+  ctx.strokeStyle = gridColor; ctx.lineWidth = 1; ctx.beginPath();
+  for(let t=0;t<=5;t++){ const y=PAD.t + t*(H/5); ctx.moveTo(PAD.l,y); ctx.lineTo(PAD.l+W,y); }
+  ctx.stroke();
+  // Ticks Y
+  ctx.fillStyle = textColor; ctx.font='12px system-ui, -apple-system, Segoe UI, Roboto';
+  for(let t=0;t<=5;t++){
+    const v = yMax - t*( (yMax-yMin)/5 ); const y = PAD.t + t*(H/5);
+    ctx.fillText(v.toLocaleString('es-AR',{style:'currency',currency:'ARS',maximumFractionDigits:0}), 6, y+4);
+  }
+  // Ticks X (inicio/medio/fin)
+  const idxs=[0,Math.floor(points.length/2),points.length-1].filter(i=>i>=0);
+  idxs.forEach(i=>{ const x=x2px(i), y=PAD.t+H; ctx.fillText(dates[i], x-36, y+18); ctx.beginPath(); ctx.moveTo(x,y-4); ctx.lineTo(x,y); ctx.stroke(); });
+
+  // Bollinger
+  const ma = sma(vals, w);
+  const sd = stdev(vals, w, ma);
+  const upper = ma.map((m,i)=> (m!=null && sd[i]!=null) ? m + k*sd[i] : null);
+  const lower = ma.map((m,i)=> (m!=null && sd[i]!=null) ? m - k*sd[i] : null);
+
+  // Relleno entre bandas
+  ctx.beginPath(); let started=false;
+  for(let i=0;i<points.length;i++){ if(upper[i]==null) continue; const x=x2px(i), y=y2px(upper[i]); if(!started){ctx.moveTo(x,y);started=true;} else ctx.lineTo(x,y); }
+  for(let i=points.length-1;i>=0;i--){ if(lower[i]==null) continue; const x=x2px(i), y=y2px(lower[i]); ctx.lineTo(x,y); }
+  ctx.closePath(); ctx.fillStyle='rgba(96,165,250,0.10)'; ctx.fill();
+
+  // Precio
+  ctx.beginPath(); ctx.lineWidth=2; ctx.strokeStyle=lineColor;
+  points.forEach((p,i)=>{ const x=x2px(i), y=y2px(p.value); i?ctx.lineTo(x,y):ctx.moveTo(x,y); });
+  ctx.stroke();
+
+  // SMA
+  ctx.beginPath(); ctx.lineWidth=1.5; ctx.strokeStyle='#94a3b8'; ctx.setLineDash([6,4]);
+  for(let i=0;i<points.length;i++){ if(ma[i]==null) continue; const x=x2px(i), y=y2px(ma[i]); (i && ma[i-1]!=null)?ctx.lineTo(x,y):ctx.moveTo(x,y); }
+  ctx.stroke(); ctx.setLineDash([]);
+
+  // Upper
+  ctx.beginPath(); ctx.lineWidth=1; ctx.strokeStyle='rgba(148,163,184,0.9)'; ctx.setLineDash([6,4]);
+  for(let i=0;i<points.length;i++){ if(upper[i]==null) continue; const x=x2px(i), y=y2px(upper[i]); (i && upper[i-1]!=null)?ctx.lineTo(x,y):ctx.moveTo(x,y); }
+  ctx.stroke();
+
+  // Lower
+  ctx.beginPath(); ctx.lineWidth=1; ctx.strokeStyle='rgba(148,163,184,0.9)';
+  for(let i=0;i<points.length;i++){ if(lower[i]==null) continue; const x=x2px(i), y=y2px(lower[i]); (i && lower[i-1]!=null)?ctx.lineTo(x,y):ctx.moveTo(x,y); }
+  ctx.stroke(); ctx.setLineDash([]);
+}
+async function loadHist(){
+  $('#histErr').textContent='';
+  const canvas = $('#histCanvas');
+  const days = Math.max(60, Math.min(540, +($('#histDays').value||180)));
+  const w    = Math.max(5,  Math.min(200, +($('#bbWindow').value||20)));
+  const k    = Math.max(0.5,Math.min(4,   +($('#bbK').value||2)));
+  try{
+    const arr = await fetchHistOficial(days);
+    if(!arr?.length) throw new Error('Sin datos');
+    drawHistBollinger(canvas, arr, w, k);
+  }catch(e){
+    console.error(e);
+    $('#histErr').textContent = 'Error al cargar histórico (Oficial).';
+  }
+}
+$('#btnHist').addEventListener('click', loadHist);
+
+/* --------- Init --------- */
 (async function init(){
   await fetchLive();
   setAutoRefresh();
+  // Carga inicial del histórico
+  setTimeout(loadHist, 800);
 })();
 </script>
 </body>
 </html>
+``
