@@ -282,8 +282,7 @@ $('#recalc').addEventListener('click', ()=> liveMap && renderArb(liveMap));
       <input id="govFill" type="checkbox" checked>
       <button id="applyGov">Aplicar</button>
     </div>
-  <script>
-/*** ==== Bandas del Gobierno (estado + helpers) ==== ***/
+ /*** ==== Bandas del Gobierno (estado + helpers) ==== ***/
 const govBand = {
   baseDate: '2025-04-11',  // fecha base
   floor: 1000,             // piso base en esa fecha
@@ -310,8 +309,6 @@ function buildGovBands(dates, baseDate, floor, ceil, driftPct){
   }
   return {piso, techo};
 }
-</script>
-<script>
 function drawHistBollinger(canvas, points, w=20, k=2){
   if(!canvas || !points?.length) return;
 
@@ -432,8 +429,6 @@ function drawHistBollinger(canvas, points, w=20, k=2){
   lineArr(up, 'rgba(148,163,184,0.9)', true);
   lineArr(lo, 'rgba(148,163,184,0.9)', true);
 }
-</script>
-<script>
 async function loadHist(){
   $('#histErr').textContent='';
   // tomar parámetros UI
@@ -471,4 +466,5 @@ document.addEventListener('DOMContentLoaded', ()=>{
 });
 </script>
 ``
+
 
